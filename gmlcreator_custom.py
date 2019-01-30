@@ -84,7 +84,6 @@ def generate_gml(G, stringizer=None):
 
     # Output node data
     node_id = dict(zip(G, range(len(G))))
-    print(node_id)
     ignored_keys = {'nxid', 'nxlabel'}
     for node, attrs in G.nodes.items():
         yield '  node ['

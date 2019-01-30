@@ -1,35 +1,73 @@
+#!/usr/bin/env python
+
+__author__ = "Cornelius Kirchhoff"
+__email__ = "cornelius.kirchhoff@gmail.com"
+
 from openpyxl import load_workbook
 import gmlcreator_custom as gmlc
 import networkx as nx
 import argparse
 
-RISK_MAPPING = {"A": {"id": 6, "colour": "#FF0000"},
-                "B": {"id": 5, "colour": "#FF9900"},
-                "C": {"id": 4, "colour": "#FFFF00"},
-                "D": {"id": 3, "colour": "#FF00FF"},
-                "E": {"id": 2, "colour": "#00FF00"},
-                "F": {"id": 1, "colour": "#CCFFCC"}
+RISK_MAPPING = {"A": {"id": 6, "colour": "#FA0018"},
+                "B": {"id": 5, "colour": "#F4B98C"},
+                "C": {"id": 4, "colour": "#FFCC66"},
+                "D": {"id": 3, "colour": "#C2DE68"},
+                "E": {"id": 2, "colour": "#7A9A40"},
+                "F": {"id": 1, "colour": "#008000"}
+               }
+               
+ROW_INDEXES = {"cur_group"   : 3,
+               "cur_node"    : 5,
+               "cause_group" : 10,
+               "cause_node"  : 8,
+               "implic_group": 14,
+               "implic_node" : 12,
+               "risk"        : 18
                }
 
-class IdGenerator():
+class IdGenerator(object):
+    """ This is just for returning an id for nodes and groups. """
     def __init__(self):
         self.id = -1
 
-    def g(self):
+    def g(self): # get id
         self.id = self.id + 1
         return self.id
 
-class GraphCustom(nx.DiGraph):
+class HazopGraph(nx.DiGraph):
     def __init__(self, rows):
         super().__init__()
-        self.create_graph_from_rows(rows)
+        self.rows = rows
 
-    def create_graph_from_rows(self, rows):
-        i = IdGenerator()
+    def create_graph_from_rows(self):
+        """
+        Read data from rows and fill graph with groups, nodes and edges.
+        For that it goes through the defined indexes of table elements
+        and reads the component name and the error.
+        Note: Group = Component; Node = Error; Edge = Dependency between errors.
+        For each Group-Node pair it checks if the group exists and creates
+        it if it does not. Then it checks if the node exists in the group
+        with the given name/label and creates it if it does not.
+        Then the edges are added from cause to cur node and from cur to
+        implic node. In the end the risk for the implic_node is set.
+        """
+        i = IdGenerator() # i.g() returns integer which ascends every time it is called
+        rows = self.rows
+        # Mapping for the indexes for easier adapting to other tables
+        x1 = ROW_INDEXES["cur_group"]
+        x2 = ROW_INDEXES["cur_node"]
+        x3 = ROW_INDEXES["cause_group"]
+        x4 = ROW_INDEXES["cause_node"]
+        x5 = ROW_INDEXES["implic_group"]
+        x6 = ROW_INDEXES["implic_node"]
+        x7 = ROW_INDEXES["risk"]
         for row in rows:
+            # Sort out rows where any crucial entry is not set
+            if None in [row[i] for i in ROW_INDEXES.values()]:
+                continue
             # Updating Groups and affiliated nodes from the first section
-            cur_group = row[3].strip()
-            cur_node = (row[5] + " " + row[6]).strip().lower()
+            cur_group = row[x1].strip()
+            cur_node = (row[x2] + " " + row[x2 + 1]).strip().lower()
             if cur_group not in nx.get_node_attributes(self, "label").values():
                 self.add_group(cur_group, i.g())
             cur_group_id = self.get_id_from_name(cur_group)
@@ -39,8 +77,8 @@ class GraphCustom(nx.DiGraph):
                                id=cur_node_id, graphics={"type": "ellipse"})
     
             # Updating Groups and affiliated nodes from the cause section
-            cause_group = row[10].strip()
-            cause_node = row[8].strip().lower()
+            cause_group = row[x3].strip()
+            cause_node = row[x4].strip().lower()
             if cause_group not in nx.get_node_attributes(self, "label").values():
                 self.add_group(cause_group, i.g())
             cause_group_id = self.get_id_from_name(cause_group)
@@ -50,8 +88,8 @@ class GraphCustom(nx.DiGraph):
                                id=cause_node_id, graphics={"type": "ellipse"})
     
             # Updating Groups and affiliated nodes from the implication
-            implic_group = row[14].strip()
-            implic_node = row[12].strip().lower()
+            implic_group = row[x5].strip()
+            implic_node = row[x6].strip().lower()
             if implic_group not in nx.get_node_attributes(self, "label").values():
                 self.add_group(implic_group, i.g())
             implic_group_id = self.get_id_from_name(implic_group)
@@ -69,14 +107,19 @@ class GraphCustom(nx.DiGraph):
             if not cur_node_id == implic_node_id:
                 self.add_edge(cur_node_id, implic_node_id)            
                 
-            #Adding risk to implicit nodes and 
-            node_risk = RISK_MAPPING[row[18]]["id"]
+            #Adding risk to implicit nodes
+            node_risk = RISK_MAPPING[row[x7]]["id"]
             self.update_node_risk(implic_node_id, node_risk)
         
     def add_group(self, name, group_id):
+        """
+        This adds a groups which just means to add a node with the 
+        isGroup attribute set to 1
+        """
         self.add_node(group_id, label=name, id=group_id, isGroup=1)
 
     def node_not_exists_in_group(self, node, group_id):
+        """ Checks if the node is in the group with the given group_id """
         for node_id in self.nodes():
             if self.node[node_id]["label"] == node:
                 if self.node[node_id]["gid"] == group_id:
@@ -84,6 +127,11 @@ class GraphCustom(nx.DiGraph):
         return True
 
     def get_id_from_name(self, name, group=None):
+        """
+        This returns the id of a node or a group by giving the related id.
+        If you want to check a node, the name of the affiliated group is 
+        also needed.
+        """
         group_id = None
         if group:
             group_id = self.get_id_from_name(group)
@@ -98,20 +146,29 @@ class GraphCustom(nx.DiGraph):
                     return self.node[node_id]["id"]
     
     def update_node_risk(self, node_id, node_risk):
+        """
+        This sets the risk attribute for a node to the given risk.
+        If the node already has a higher risk then it remains unchanged.
+        """
         if ((not self.node[node_id].get("risk") or 
              self.node[node_id]["risk"] < node_risk)):
             self.node[node_id]["risk"] = node_risk
 
     def set_backdated_risks(self):
+        """
+        This updates the risk for all predecessors of the given node.
+        """
         for node_id in nx.get_node_attributes(self, "risk"):
             node_risk = self.node[node_id]["risk"]
             predecessors = self.get_all_predecessors(node_id)
-            print(predecessors)
             if predecessors:
                 for predecessor in predecessors:
                     self.update_node_risk(predecessor, node_risk)
             
     def get_all_predecessors(self, node_id):
+        """
+        Returns a set with all predecessors of the given node.
+        """
         global_predecessors = set()
         nodes_to_add = set([node_id])
         while nodes_to_add:
@@ -123,6 +180,9 @@ class GraphCustom(nx.DiGraph):
         return global_predecessors
 
     def get_all_successors(self, node_id):
+        """
+        Returns a set with all successors of the given node.
+        """
         global_successors = set()
         nodes_to_add = set([node_id])
         while nodes_to_add:
@@ -134,8 +194,11 @@ class GraphCustom(nx.DiGraph):
         return global_successors
     
     def get_single_node(self, node_name, group_name):
+        """
+        Parse args strings given with -s and find all predecessors and
+        successors and remove all other nodes from graph.
+        """
         node_id = self.get_id_from_name(node_name, group_name)
-        print(node_id)
         predecessors = self.get_all_predecessors(node_id)
         successors = self.get_all_successors(node_id)
         relatives = predecessors.union(successors)
@@ -147,12 +210,21 @@ class GraphCustom(nx.DiGraph):
             self.remove_node(node)
 
     def colour_nodes(self):
+        """
+        Set the node colour depending on the nodes risk to the colour 
+        which is defined in RISK_MAPPING.
+        """
         for node_id in self.nodes():
             node_risk = self.node[node_id].get("risk")
             if node_risk:
                 self.node[node_id]["graphics"]["fill"] = risk_colour(node_risk)
 
     def colour_edges(self):
+        """
+        Set the edge colour depending on the nodes risk to the colour 
+        which is defined in RISK_MAPPING. Also the width of the edge is
+        changed: The higher the risk, the thicker the edge.
+        """
         for node_id in self.nodes():
             node_risk = self.node[node_id].get("risk")
             if node_risk:
@@ -166,6 +238,10 @@ class GraphCustom(nx.DiGraph):
                         self.edges[source,target]["graphics"] = edge_graphics
     
     def limit_risk_range(self, risk):
+        """
+        This removes all nodes from the graph which have lower risk than
+        the desired risk.
+        """
         risk_id = RISK_MAPPING[risk]["id"]
         nodes_to_remove = set()
         for node_id in self.nodes():
@@ -178,6 +254,11 @@ class GraphCustom(nx.DiGraph):
             self.remove_node(node)
     
     def remove_remaining_edges(self):
+        """
+        This clears edges which remain after some node where removed.
+        They would not appear in the graph anyways but they appear in the 
+        .gml file
+        """
         nodes = self.nodes()
         for edge in self.edges():
             source = edge[0]
@@ -185,7 +266,14 @@ class GraphCustom(nx.DiGraph):
             if source not in nodes or target not in nodes:
                 self.remove_edge(source, target)
 
+
 def get_xls_rows(file_, tab):
+    """
+    Loads the hazop table and reads it starting from the row defined by
+    STARTING_ROW.
+    This returns a list with specific openpyxl objects which you can access
+    like a list with [].
+    """
     wb = load_workbook(filename = file_)
     ws = wb[tab]
     rows = []
@@ -200,29 +288,27 @@ def get_xls_rows(file_, tab):
     return rows
 
 def risk_colour(risk_id):
+    """ Returns the affiliated colour for the given risk_id (e.g. "A")"""
     for risk in RISK_MAPPING.values():
         if risk_id in risk.values():
             return risk["colour"]
 
 def main(args):
-    
     rows = get_xls_rows(args.file, args.tab)
-    graph = GraphCustom(rows)
-    graph.create_graph_from_rows(rows)
-
     
-    print(args.single_node)
+    graph = HazopGraph(rows)
+    graph.create_graph_from_rows()
     if args.single_node:
         node = args.single_node[0].replace("_", " ")
         group = args.single_node[1].replace("_", " ")
         graph.get_single_node(node, group)
-    #Apply risk to predescessor nodes
     graph.set_backdated_risks()
-    
-    graph.limit_risk_range(args.risk)
-    if args.colour_nodes: graph.colour_nodes()
-    if args.colour_edges: graph.colour_edges()
+    graph.limit_risk_range(args.risk) # Default is set to "F"
+    graph.colour_nodes()
+    graph.colour_edges()
     graph.remove_remaining_edges()
+    
+    # Use modified version of write_gml to write the gml.
     gmlc.write_gml(graph, args.output)
 
 if __name__ == "__main__":
@@ -231,17 +317,12 @@ if __name__ == "__main__":
                         help='path to target gmlfile')
     parser.add_argument('-r', '--risk', default="F",
                         help='minimum risk level to show (F to A)')
-    parser.add_argument('--colour-nodes', default=True, type=bool,
-                        help='improves visualization of higher risks')
-    parser.add_argument('--colour-edges', default=True, type=bool,
-                        help='improves visualization of higher risks ')
     parser.add_argument('-s', '--single-node', nargs="+", type=str,
-                        help='Choose a single node and all its successors \
+                        help='View a single node and all its successors \
                         and predecessors. Syntax: -s no_flow C2')
-    parser.add_argument('-f', '--file', required=False, type=str, 
-                        default='HAZOP-Beispiel.xlsm',
+    parser.add_argument('-f', '--file', type=str, default='HAZOP-Beispiel.xlsm',
                         help='input hazop xls/xlsm file')
-    parser.add_argument('-t', '--tab', required=False, default='mHAZOP - Module',
+    parser.add_argument('-t', '--tab', default='mHAZOP - Module',
                         help='name of the tab to use')
 
     args = parser.parse_args()
